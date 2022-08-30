@@ -1,142 +1,45 @@
 import sys
 import numpy as np
-#import numpy.random as random
 import scipy.io.wavfile
-import scipy.special
 import matplotlib.pyplot as plt
 
-MORSE_TABLE = {
-    'E':    '.',
-    'T':    '-',
-    'I':    '..',
-    'A':    '.-',   
-    'N':    '-.',
-    'M':    '--',
-    'S':    '...',
-    'U':    '..-',
-    'R':    '.-.',
-    'W':    '.--',
-    'D':    '-..',
-    'K':    '-.-',
-    'G':    '--.',
-    'O':    '---',
-    'H':    '....',
-    'V':    '...-',
-    'F':    '..-.',
-#   ' ':    '..--',    
-    'L':    '.-..',
-#   ' ':    '.-.-',
-    'P':    '.--.',
-    'J':    '.---',    
-    'B':    '-...',
-    'X':    '-..-',
-    'C':    '-.-.',
-    'Y':    '-.--',   
-    'Z':    '--..',
-    'Q':    '--.-',
-#   ' ':    '---.',
-#   ' ':    '----',
-    '0':    '-----',
-    '1':    '.----',
-    '2':    '..---',
-    '3':    '...--',
-    '4':    '....-',
-    '5':    '.....',
-    '6':    '-....',
-    '7':    '--...',
-    '8':    '---..',
-    '9':    '----.',
-    '<KN>': '-.--.', # also as (
-    '<AR>': '.-.-.', # also as +
-    '<AS>': '.-...', # also as &
-    '<CT>': '-.-.-',
-    '=':    '-...-', # also <BT>
-    '/':    '-..-.',
-    '?':    '..--..',
-    ',':    '--..--',
-    '.':    '.-.-.-',
-    '<SK>': '...-.-'
-}
+from morse import MORSE_TABLE
+from stats import *
+from dsp import *
+from fst import *
 
-def cdf_chi2_1dim(x):
-    ''' Cumulative probability distribution function of chi-squared distribution with 1 dimension,
-        i.e. distribution of power if the amplitude is unity normal distributed.
-    '''
-    return scipy.special.erf(np.sqrt(x / 2 ))
-    # return np.tanh(np.sqrt(x) * np.sqrt(np.pi/2) * np.log(2))
+class CWMonitor:
+    def __init__(self, fs, fmin=300, fmax=3000):
+        self.fs = fs
+        self.N = int(fs * 0.060)
+        self.L = self.N // 2
+        self.win = np.blackman(self.N)
+        self.buf = []
+        self.idx_lo = int(self.N * fmin / fs)
+        self.idx_hi = int(self.N * fmax / fs)
+        self.fmin = fmin
+        self.hist = []
 
-def pdf_chi2_1dim(x, scale=1):
-    ''' Probability distribution function of chi-squared distribution with 1 dimension,
-        i.e. distribution of power if the amplitude is unity normal distributed.
-        Gamma(1/2, 2*scale)
-    '''
-    y = x / scale
-    return np.exp(-y / 2) / np.sqrt(2 * np.pi * y)
+    def process(self, samples):
+        self.buf.extend(samples)
+        pos = 0
+        while pos + self.N < len(self.buf):
+            self.process_block(self.buf[pos:pos+self.N])
+            pos += self.L
+        self.buf = self.buf[pos:]
 
-def pdf_half_normal(x, sigma=1):
-    return np.sqrt(2 / np.pi) / sigma * np.exp(-x*x / (2*sigma*sigma))
+    def process_block(self, block):
+        H = np.fft.rfft(self.win * block)[self.idx_lo:self.idx_hi]
+        A = np.abs(H)
+        Adb = 20*np.log10(A + 1e-6)
+        if len(self.hist) > 30:
+            self.hist = self.hist[-30:]
+        self.hist.append(Adb)
 
-def pdf_chi2_2dim(x, scale=1):
-    y = x / scale
-    return np.exp(-y / 2) / 2
-
-def pdf_rayleigh(x, sigma=1):
-    return x / (sigma * sigma) * np.exp(-x*x / (2*sigma*sigma))
-
-def pdf_normal(x, mu, sigma):
-    x_norm = (x - mu) / sigma
-    return np.exp( -(x_norm**2)/2 ) / sigma / np.sqrt(2*np.pi)
-
-def goertzel_power(frame, k):
-    π = np.pi
-    ω = 2 * π * k / len(frame)
-    coeff = 2 * np.cos(ω)
-
-    sprev = 0
-    sprev2 = 0
-    for x_n in frame:
-        s = x_n + (coeff * sprev) - sprev2
-        sprev2 = sprev
-        sprev = s
-
-    power = (sprev2 * sprev2) + (sprev * sprev) - (coeff * sprev * sprev2)
-    return power # 
-    # return power / len(frame) * 15
-
-class FST:
-    def __init__(self):
-        self.arcs = dict()
-        self.arcs_from_state_sym_in = dict()
-        self.arcs_from_state_sym_out = dict()
-        self.final_states = set()
-
-    def add_final(self, state):
-        self.final_states.add(state)
-
-    def add_arc(self, state_from, state_to, sym_in, sym_out, prob):
-        key = (state_from, state_to, sym_in, sym_out)
-        # print(f'Arc {key} -> {prob}')
-        self.arcs[key] = prob
-
-        if not (state_from, sym_in) in self.arcs_from_state_sym_in:
-            self.arcs_from_state_sym_in[state_from, sym_in] = list()
-        self.arcs_from_state_sym_in[state_from, sym_in].append( (state_to, sym_out, prob) )
-
-        if not (state_from, sym_out) in self.arcs_from_state_sym_out:
-            self.arcs_from_state_sym_out[state_from, sym_out] = list()
-        self.arcs_from_state_sym_out[state_from, sym_out].append( (state_to, sym_in, prob) )
-
-    def translate(self, state_from, sym_in):
-        if (state_from, sym_in) in self.arcs_from_state_sym_in:
-            return self.arcs_from_state_sym_in[state_from, sym_in]
-        else:
-            return []
-
-    def translate_reverse(self, state_from, sym_out):
-        if (state_from, sym_out) in self.arcs_from_state_sym_out:
-            return self.arcs_from_state_sym_out[state_from, sym_out]
-        else:
-            return []
+        # V = np.std(self.hist, axis=0)
+        # idx = np.argmax(V)
+        # freq = (self.idx_lo + idx) * self.fs / self.N
+        # print(idx, freq, V[idx])
 
 class CWFrontend:
     def __init__(self, N, K, D):
@@ -153,10 +56,7 @@ class CWFrontend:
         self.noise_stat = []
         self.p_hist = [0.1, 0.1, 0.1, 0.1]
         self.last_power = 0
-        self.is_mark = False
-        self.counter = [0, 0]
-        self.count_stats = (list(), list())
-    
+
     def process(self, frame):
         scale = 1.0 / self.N
         frame_win = self.win * (frame) # + 0.2 * np.random.normal(size=self.N))
@@ -165,9 +65,9 @@ class CWFrontend:
         power3 = scale * goertzel_power(frame_win, self.K - 3)
         power4 = scale * goertzel_power(frame_win, self.K + 2)
         power5 = scale * goertzel_power(frame_win, self.K - 2)
-        
+
         power1 += 0.07 * (power1 - self.last_power)
-        if power1 < 1e-9: 
+        if power1 < 1e-9:
             power1 = 1e-9
         self.last_power = power1
 
@@ -180,16 +80,16 @@ class CWFrontend:
         # Calculate posterior probability from two component mixture pdf
         pd_noise = pdf_half_normal(np.sqrt(power1), np.sqrt(self.sigma_nse))
         # pd_noise = pdf_chi2_1dim(power1 / self.sigma_nse, 1)
-        pd_signal = pdf_rayleigh(np.sqrt(power1), np.sqrt(self.sigma_sig))
+        pd_signal = pdf_rayleigh(np.sqrt(power1), np.sqrt(self.sigma_sig/2))
         # pd_signal = pdf_rayleigh(np.sqrt(power1) / self.sigma_sig / 1.0, 1.0)
         p = pd_signal / (pd_noise + pd_signal) # mixture weights are assumed 0.5/0.5
 
         # if power1 > 9 * self.sigma_nse:
-        if p > 0.95:
+        if p > 0.97:
             # self.sig_stat.append( power1 )
             #sigma_mle = np.sqrt( np.sum(np.power(self.sig_stat, 2)) / (2 * len(self.sig_stat)) )
             # sigma_mle = np.sqrt( np.sum(self.sig_stat) / (2 * len(self.sig_stat)) )
-            self.sigma_sig += 0.1 * (power1/2 - self.sigma_sig)
+            self.sigma_sig += 0.1 * (power1 - self.sigma_sig)
         # else:
             # self.noise_stat.append( power1 / self.sigma_nse )
 
@@ -201,21 +101,6 @@ class CWFrontend:
         self.p_stat.append( p_filt )
         self.D.process(p_filt)
 
-        if self.is_mark:
-            if p_filt < 0.35:
-                #self.count_stats[1].append(self.counter[1])
-                self.is_mark = False
-                self.counter[0] = 1
-            else:
-                self.counter[1] += 1
-        else:
-            if p_filt > 0.65:
-                self.count_stats[0].append(self.counter[0] + np.random.normal(scale=0.5))
-                self.count_stats[1].append(self.counter[1] + np.random.normal(scale=0.5))
-                self.is_mark = True
-                self.counter[1] = 1
-            else:
-                self.counter[0] += 1
 
 class FSTDecoder:
     def __init__(self):
@@ -317,7 +202,7 @@ class FSTDecoder:
         idx_state = add_pdf(F, '_', '0', [0, 1, 3, 3, 1], idx_state) # space
         F.add_final(0)
         return F
-    
+
     def create_f2(self):
         F = FST()
         # Dot (M)
@@ -340,7 +225,7 @@ class FSTDecoder:
         F.add_arc(9, 10, '', '_', 0)
         F.add_arc(10, 11, '', '_', 0)
         F.add_arc(11, 0, '', '_', 0)
-        
+
         F.add_arc(11, 11, '', '_', 0)
         F.add_final(0)
         return F
@@ -377,8 +262,9 @@ class SlicerDecoder:
         self.elements = ''
         self.decoded = ''
         self.lookup = {elements: char for (char, elements) in MORSE_TABLE.items()}
+        self.mark_mix = np.array([ [0.5, 3.0, 1.0], [0.5, 8.0, 2.0] ])
         pass
-    
+
     def process(self, p):
         if self.is_mark:
             if p < self.thr_lo:
@@ -398,11 +284,36 @@ class SlicerDecoder:
                 self.counter[0] += 1
 
     def process_mark(self, count):
-        if count < self.min_long:
+        p_k_sum = 0
+        gamma = []
+        for (pi, mu, sigma) in self.mark_mix:
+            p_k = pi * pdf_normal(count, mu, sigma)
+            gamma.append(p_k)
+            p_k_sum += p_k
+        gamma = np.array(gamma) / p_k_sum
+        for k in range(len(self.mark_mix)):
+            if gamma[k] < 1e-1:
+                continue
+            mu = self.mark_mix[k][1]
+            pi_est = 1
+            mu_est = count
+            sigma_est = np.abs(count - mu)
+            est = np.array((pi_est, mu_est, sigma_est))
+            self.mark_mix[k] += 0.05 * (est - self.mark_mix[k])
+        p_k_sum = 0
+        for (pi, mu, sigma) in self.mark_mix:
+            p_k_sum += pi
+        for k in range(len(self.mark_mix)):
+            self.mark_mix[k][0] /= p_k_sum
+        # print(count, gamma, self.mark_mix[0][1], self.mark_mix[1][1], self.mark_mix[0][2], self.mark_mix[1][2])
+
+        # if count < self.min_long:
+        if gamma[0] > 0.5:
             self.elements += '.' # dit
-        elif count < self.min_word:
+        #elif count < self.min_word:
+        elif gamma[1] > 0.5:
             self.elements += '-' # dash
-    
+
     def process_space(self, count):
         if count < self.min_long:
             pass # interelement space
@@ -412,6 +323,7 @@ class SlicerDecoder:
             self.elements += ' ' # interword space
 
     def decode(self):
+        print(f'Dit length={self.mark_mix[0][1]:.2f}, ratio={self.mark_mix[1][1]/self.mark_mix[0][1]:.1f}')
         print(self.elements)
         decoded = list()
         for word in self.elements.split(' '):
@@ -438,17 +350,19 @@ def main():
 
     # N = 260                       # Analysis frame length
     S = int(samples_unit / 3.5)     # Analysis step size
-    N = int(3.2*S)                  # Analysis frame length
+    N = int(3.5*S)                  # Analysis frame length
     K = int(0.5 + (N * fdet / fs))  # Analysis frequency bin
     print(f'Sampling frequency: {fs}Hz')
     print(f'Detection frequency: {K*fs/N}Hz')
 
+    M = CWMonitor(fs)
     D = FSTDecoder()
     # D = SlicerDecoder(fps=fs/S, wpm=wpm)
     frontend = CWFrontend(N, K, D)
 
     for idx in range(0, len(sig) - N, S):
         frontend.process(sig[idx:idx+N])
+        # M.process(sig[idx:idx+N])
 
     D.decoded += D.decode()
 
@@ -468,12 +382,12 @@ def main():
     # plt.plot(x1, y1)
     # plt.plot(-x2, y2)
     # plt.plot(frontend.p_stat, marker='.')
-    plt.hist(-np.array(frontend.count_stats[0]), bins=range(-30, 15))
-    plt.hist(frontend.count_stats[1], bins=range(-30, 15))
+    # plt.hist(-np.array(frontend.count_stats[0]), bins=range(-30, 15))
+    # plt.hist(frontend.count_stats[1], bins=range(-30, 15))
     # plt.scatter(frontend.count_stats[0], frontend.count_stats[1])
     # plt.imshow(np.tile(frontend.p_stat, (200, 1)), vmin=0, vmax=1, cmap=plt.get_cmap('viridis'))
-    plt.grid()
-    plt.show()
+    # plt.grid()
+    # plt.show()
 
 if __name__ == '__main__':
     main()

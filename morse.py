@@ -5,7 +5,8 @@ import math
 import random
 import numpy as np
 
-morseTable = {
+
+MORSE_TABLE = {
     'E':    '.',
     'T':    '-',
     'I':    '..',
@@ -45,8 +46,19 @@ morseTable = {
     '6':    '-....',
     '7':    '--...',
     '8':    '---..',
-    '9':    '----.',    
+    '9':    '----.',
+    '<KN>': '-.--.', # also as (
+    '+': '.-.-.', # also as <AR>
+    '&': '.-...', # also as <AS>
+    '<CT>': '-.-.-',
+    '=':    '-...-', # also <BT>
+    '/':    '-..-.',
+    '?':    '..--..',
+    ',':    '--..--',
+    '.':    '.-.-.-',
+    '<SK>': '...-.-'
 }
+
 
 def stringToKey(str):
     key = ''
@@ -58,13 +70,13 @@ def stringToKey(str):
             key += c
         elif c == ' ':
             key += c
-        elif uc in morseTable:
+        elif uc in MORSE_TABLE:
             thisChar = True
             if lastChar:
                 key += '`'
-            key += morseTable[uc]
+            key += MORSE_TABLE[uc]
         lastChar = thisChar
-    return key + '`'
+    return '`' + key  + '`'
 
 def keyToTimings(key, wpm = 25):
     s = wpm
@@ -85,7 +97,8 @@ def keyToTimings(key, wpm = 25):
         elif c == ' ':
             timings.append(-tw)
         elif c == '`':
-            timings.append(-tc)
+            # timings.append(-tc)
+            timings.append(-u)
         elif c == '.':
             thisOn = True
             if lastOn:
@@ -105,12 +118,11 @@ def timingsToEnvelope(timings, fs = 200):
     target = 0
     for t in timings:
         target += math.fabs(t)
-        phase = 0
         while (dt * len(env)) < target:
             if t > 0:
-                env.append(1)
+                env.append(1.0)
             else:
-                env.append(-1)
+                env.append(-1.0)
                 
     return env
 
@@ -133,11 +145,14 @@ def generateTrainingSample(wpm = 20, fs = 50):
 
 def generateCorrelators(wpm = 20, fs = 50):
     cor = dict()
-    for c in morseTable:
-        key = stringToKey('`' + c)
+    for c in MORSE_TABLE:
+        key = stringToKey(c)
         timings = keyToTimings(key, wpm)
         env = timingsToEnvelope(timings, fs)
         cor[c] = np.array(env)
+        cor[c] -= np.mean(cor[c])
+    print(cor['E'])
+    print(cor['T'])
     return cor
 
 def example1():
@@ -146,10 +161,10 @@ def example1():
     timings = keyToTimings(key, 20)
     env = timingsToEnvelope(timings, 50)
 
-    print string
-    print key
-    print timings
-    print env
+    print(string)
+    print(key)
+    print(timings)
+    print(env)
 
 def extractEnv(sig, fsOrig, fs):
     #bandpass = spsig.firwin(50, [f1, f2], pass_zero=False)
@@ -163,84 +178,46 @@ def extractEnv(sig, fsOrig, fs):
         fs2 = float(fsOrig * N) / M
         relErr = math.fabs(fs2/fs - 1.0)
         if relErr < 1E-3:
-            print N, "/", M
+            print(N, "/", M)
             break
 
     env = spsig.resample_poly(env, N, M)
-    env -= np.mean(env)
+    #env -= np.mean(env)
     env /= np.max(env)
     
     return env
 
-import wave
-import struct
-import scipy.signal as spsig
+if __name__ == '__main__':
+    import wave
+    import struct
+    import scipy.signal as spsig
 
-wav = wave.open(sys.argv[1])
-fs = wav.getframerate()
-assert(wav.getnchannels() == 1)
-assert(wav.getsampwidth() == 2)
-count = wav.getnframes()
-sig = struct.unpack('<' + 'h' * count, wav.readframes(count))
-sig = np.array(sig) / 32768.0
+    wav = wave.open(sys.argv[1])
+    fs = wav.getframerate()
+    assert(wav.getnchannels() == 1)
+    assert(wav.getsampwidth() == 2)
+    count = wav.getnframes()
+    sig = struct.unpack('<' + 'h' * count, wav.readframes(count))
+    sig = np.array(sig) / 32768.0
 
-fs2 = 100
-wpm = 26
+    fs2 = 125
+    wpm = 22
 
-env = extractEnv(sig, fs, fs2)
-corr = generateCorrelators(wpm = wpm, fs = fs2)
+    env = extractEnv(sig, fs, fs2)
+    corr = generateCorrelators(wpm = wpm, fs = fs2)
 
-c1 = spsig.convolve(env, corr['C'], mode = 'same')
-c2 = spsig.convolve(env, corr['R'], mode = 'same')
+    c1 = spsig.convolve(env, corr['E'], mode = 'same')
+    c2 = spsig.convolve(env, corr['T'], mode = 'same')
 
-print c1[200:280]
-print c2[200:280]
+    import matplotlib.pyplot as plt
 
-sys.exit(0)
+    #plt.plot(env[:1000])
+    plt.plot(c1[:1000])
+    plt.plot(c2[:1000])
+    # plt.plot(c1[:1000], c2[:1000])
+    plt.grid()
+    plt.show()
+    #print(c1[200:280])
+    #print(c2[200:280])
 
-def appendChain(states, arcs, newStates, prevState = -1):
-    for (emit, label) in newStates:
-        idxState = len(states)
-        states.append((emit, label))
-        if prevState != -1:
-            arcs.append((prevState, idxState, 1.000))
-        prevState = idxState
-
-    return idxState
-
-def buildHMM():
-    states = list()
-    arcs = list()
-
-    stateChar = appendChain(states, arcs, ((-1, None),) * 3)
-    stateWord = appendChain(states, arcs, ((-1, None),) * 4, stateChar)
-
-    stateBreak1 = appendChain(states, arcs, ((-1, None),) * 1, stateWord)
-    stateBreak2 = appendChain(states, arcs, ((-1, None),) * 3, stateBreak1)
-    arcs.append((stateBreak2, stateBreak1, 1.000))
-    stateBreak = appendChain(states, arcs, ((-1, None),) * 1, stateBreak2)
-
-    for c in morseTable:
-        st = []
-        for x in morseTable[c]:       
-            if x == '.':
-                st.append([-1, None])
-            elif x == '-':
-                st.append([1, None])
-        st[-1][1] = c
-
-        stateBegin = len(states)
-        stateEnd = appendChain(states, arcs, st)
-        arcs.append((stateChar, stateBegin, 1.000))
-        arcs.append((stateWord, stateBegin, 1.000))
-        arcs.append((stateBreak, stateBegin, 1.000))
-        arcs.append((stateEnd, 0, 1.000))
-             
-    print arcs
-    print states
-        
-    pTrans = dict()
-
-#keras.layers.convolutional.Conv1D(filters, kernel_size, padding='causal', use_bias=True)
-#keras.layers.recurrent.GRU(numHidden)   # or LSTM
-#keras.layers.core.Dense(numOutput)
+    sys.exit(0)
