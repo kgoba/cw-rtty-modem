@@ -1,7 +1,6 @@
 import sys
 import numpy as np
 import scipy.io.wavfile
-import matplotlib.pyplot as plt
 
 from morse import MORSE_TABLE
 from stats import *
@@ -55,49 +54,36 @@ class CWFrontend:
         self.sig_stat_norm = []
         self.noise_stat = []
         self.p_hist = [0.1, 0.1, 0.1, 0.1]
-        self.last_power = 0
 
     def process(self, frame):
         scale = 1.0 / self.N
         frame_win = self.win * (frame) # + 0.2 * np.random.normal(size=self.N))
         power1 = scale * goertzel_power(frame_win, self.K)
-        power2 = scale * goertzel_power(frame_win, self.K + 3)
-        power3 = scale * goertzel_power(frame_win, self.K - 3)
-        power4 = scale * goertzel_power(frame_win, self.K + 2)
-        power5 = scale * goertzel_power(frame_win, self.K - 2)
+        power2 = scale * goertzel_power(frame_win, self.K + 4)
+        power3 = scale * goertzel_power(frame_win, self.K - 4)
+        power4 = scale * goertzel_power(frame_win, self.K + 3)
+        power5 = scale * goertzel_power(frame_win, self.K - 3)
 
-        power1 += 0.07 * (power1 - self.last_power)
-        if power1 < 1e-9:
-            power1 = 1e-9
-        self.last_power = power1
-
-        # noise_pwr = 3.4 * min( (power1, power2, power3, power4, power5) )
-        # noise_pwr = 2.7 * min( (power1, power2, power3) )
-        # noise_pwr = np.mean( (power2, power3) )
-        noise_pwr = np.mean( (power2, power3, power4, power5) )
+        noise_pwr = np.median( (power2, power3, power4, power5) )
         self.sigma_nse += 0.1 * (noise_pwr - self.sigma_nse)
 
         # Calculate posterior probability from two component mixture pdf
         pd_noise = pdf_half_normal(np.sqrt(power1), np.sqrt(self.sigma_nse))
-        # pd_noise = pdf_chi2_1dim(power1 / self.sigma_nse, 1)
         pd_signal = pdf_rayleigh(np.sqrt(power1), np.sqrt(self.sigma_sig/2))
-        # pd_signal = pdf_rayleigh(np.sqrt(power1) / self.sigma_sig / 1.0, 1.0)
         p = pd_signal / (pd_noise + pd_signal) # mixture weights are assumed 0.5/0.5
 
         # if power1 > 9 * self.sigma_nse:
-        if p > 0.97:
+        if p > 0.9:
             # self.sig_stat.append( power1 )
-            #sigma_mle = np.sqrt( np.sum(np.power(self.sig_stat, 2)) / (2 * len(self.sig_stat)) )
-            # sigma_mle = np.sqrt( np.sum(self.sig_stat) / (2 * len(self.sig_stat)) )
             self.sigma_sig += 0.1 * (power1 - self.sigma_sig)
         # else:
             # self.noise_stat.append( power1 / self.sigma_nse )
+        # if p < 0.1:
+        #     self.sigma_nse += 0.1 * (power1 - self.sigma_nse)
 
         self.p_hist.append(p)
         # p_filt = p
-        # p_filt = self.p_hist[-1] * np.sqrt(self.p_hist[-2])
-        p_filt = np.sqrt(self.p_hist[-1] * self.p_hist[-2]) # * self.p_hist[-4]
-        # p_filt = 2*(self.p_hist[-1] - 0.5) * (self.p_hist[-2] - 0.5) + 0.5
+        p_filt = np.sqrt(self.p_hist[-1] * self.p_hist[-2])
         self.p_stat.append( p_filt )
         self.D.process(p_filt)
 
@@ -348,9 +334,8 @@ def main():
     t_unit = 1.2 / wpm
     samples_unit = fs * t_unit
 
-    # N = 260                       # Analysis frame length
-    S = int(samples_unit / 3.5)     # Analysis step size
-    N = int(3.5*S)                  # Analysis frame length
+    S = int(samples_unit / 3.2)     # Analysis step size
+    N = int(samples_unit)           # Analysis frame length
     K = int(0.5 + (N * fdet / fs))  # Analysis frequency bin
     print(f'Sampling frequency: {fs}Hz')
     print(f'Detection frequency: {K*fs/N}Hz')
@@ -373,6 +358,7 @@ def main():
     snr = 10 * np.log10(frontend.sigma_sig / frontend.sigma_nse)
     print(f'SNR = {snr:.1f} dB')
 
+    # import matplotlib.pyplot as plt
     # plt.hist(frontend.sig_stat_norm, bins=np.linspace(0, 4, 20), density=True)
     # plt.hist(-np.array(frontend.noise_stat), bins=np.linspace(-4, 0, 20), density=True)
     # x1 = np.linspace(0, 4, 100)
