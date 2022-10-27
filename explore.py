@@ -4,25 +4,14 @@ import scipy.signal
 import scipy.special
 import numpy as np
 
-MIN_SYMBOL_LENGTH = 0.030 # 30 ms is for 40 WPM
+MIN_SYMBOL_LENGTH = 0.028125 # 30 ms is for 40 WPM
 SYMBOL_OSR = 3 # try to get at least 3 samples per symbol (necessary for stable FST operation)
 
 def zeta(theta):
     t2 = theta**2
     return 2 + t2 - np.pi/8 * np.exp(-t2 / 2) * ((2 + t2) * scipy.special.iv(0, t2/4) + t2 * scipy.special.iv(1, t2/4))**2
 
-def main():
-    fs, sig = scipy.io.wavfile.read(sys.argv[1])
-    sig = sig * (1.0/32768)
-    print(f'Fs={fs} Hz, file length {len(sig)/fs:.3f} s')
-    win_length = MIN_SYMBOL_LENGTH
-    win_size = int(0.5 + win_length * fs)
-    win_shift = win_size // SYMBOL_OSR
-    fgrid, tgrid, H = scipy.signal.stft(sig, window='hamming', nperseg=win_size, noverlap=win_size - win_shift, nfft=win_size*2, fs=fs)
-    Hr, Hi = np.real(H), np.imag(H)
-    A = np.abs(H)
-
-    print(f'Analysis window size {win_size} samples') # ({fs/win_size:.1f} Hz per bin)')
+def analyse1(fgrid, tgrid, A):
 
     k1 = np.sqrt(np.var(A, axis=1)/0.429) # Var(Rayleigh) = sigma^2 * (4-pi)/2
     k2 = np.mean(A, axis=1)/1.253         # Mean(Rayleigh) = sigma * sqrt(pi/2)
@@ -114,7 +103,42 @@ def main():
     #     # plt.plot(fgrid, np.log(k1 / (1e-4 + k2)), marker='.')
     #     # plt.plot(fgrid, np.std(A**2, axis=1), marker='.')
     #     # plt.plot(fgrid, np.mean(A**2, axis=1), marker='.')
-    plt.grid()
+
+def analyse2(fgrid, tgrid, H):
+    win_size = 256
+    win_shift = 32
+    fs = 1 / (MIN_SYMBOL_LENGTH / SYMBOL_OSR)
+    A = np.abs(H)
+    A2 = list()
+    for bin in range(A.shape[0]):
+        sig2 = scipy.signal.lfilter([1, -1], 1, A[bin, :])
+        _, _, H2 = scipy.signal.stft(sig2 - np.mean(sig2), window='boxcar', nperseg=win_size, noverlap=win_size - win_shift, nfft=win_size, fs=fs)
+        # A2.append(np.mean(np.abs(H2[15:90, :]), axis=0))
+        A2.append(np.abs(H2))
+    plt.plot(np.mean(A2, axis=(0, 2)))
+    # plt.plot(np.mean(A2, axis=1))
+    # plt.plot(A2)
+    # A2_env = scipy.signal.convolve2d(A2, [[1, 1], [1, 1], [1, 1], [1, 1], [1, 1], [1, 1], [1, 1]], mode='same', boundary='wrap')
+    # A2_env = scipy.signal.filtfilt([1, 1, 1], 1, np.mean(A2, axis=0)) / 9
+    # A2_env = np.max(A2, axis=0)
+    A2_env = 1
+    # plt.imshow(np.array(A2) / A2_env)
+
+def main():
+    fs, sig = scipy.io.wavfile.read(sys.argv[1])
+    sig = sig * (1.0/32768)
+    print(f'Fs={fs} Hz, file length {len(sig)/fs:.3f} s')
+    sym_size = int(0.5 + MIN_SYMBOL_LENGTH * fs)
+    win_size = sym_size
+    win_shift = sym_size // SYMBOL_OSR
+    nfft = win_size
+    fgrid, tgrid, H = scipy.signal.stft(sig, window='hamming', nperseg=win_size, noverlap=win_size - win_shift, nfft=nfft, fs=fs)
+
+    print(f'Analysis window size {win_size} samples ({fs/nfft:.1f} Hz per bin)')
+
+    analyse2(fgrid, tgrid, H)
+
+    # plt.grid()
     plt.show()
 
 if __name__ == '__main__':

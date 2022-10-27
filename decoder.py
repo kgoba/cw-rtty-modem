@@ -159,6 +159,9 @@ class FSTDecoder:
         return (''.join([x[2] for x in reversed(word_in)]))
 
     def create_f1(self):
+        '''
+        Creates a probabilistic FST that translates mark/space to a sequence of high/low samples (with duration distribution)
+        '''
         F = FST()
         idx_state = 1
 
@@ -190,6 +193,9 @@ class FSTDecoder:
         return F
 
     def create_f2(self):
+        '''
+        Creates an FST that translates from dot/dash/various spaces to mark/space (according to Farnsworth timing)
+        '''
         F = FST()
         # Dot (M)
         F.add_arc(0, 1, '.', 'M', 0)
@@ -212,12 +218,16 @@ class FSTDecoder:
         F.add_arc(10, 11, '', '_', 0)
         F.add_arc(11, 0, '', '_', 0)
 
-        F.add_arc(11, 11, '', '_', 0)
+        F.add_arc(11, 11, '', '_', 0) # loopback path for indeterminate pauses
         F.add_final(0)
         return F
 
     def create_f3(self):
+        '''
+        Creates an FST that translates alphanumeric characters into dots/dashes/spaces
+        '''
         F = FST()
+        # add paths (linear chains) from state 0 to state 1 for each character in MORSE_TABLE
         idx_next = 2
         for sym_in in MORSE_TABLE:
             q1 = 0
@@ -229,8 +239,9 @@ class FSTDecoder:
                 q2 = idx_next
             F.add_arc(q1, 1, sym_in, MORSE_TABLE[sym_in][-1], 0)
 
-        F.add_arc(1, 0, '', '|', 0)
-        F.add_arc(1, 0, ' ', ' ', 0)
+        # add transitions from state 1 back to state 0
+        F.add_arc(1, 0, '', '|', 0)     # intercharacter space
+        F.add_arc(1, 0, ' ', ' ', 0)    # interword space
         F.add_final(1)
         return F
 
